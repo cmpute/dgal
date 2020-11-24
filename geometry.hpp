@@ -57,6 +57,7 @@
 #include <limits>
 #include <string>
 #include <sstream>
+#include <type_traits>
 
 // CUDA function descriptors
 #ifdef __CUDACC__
@@ -107,6 +108,23 @@ template <> class Numeric<double>
     public:
         static constexpr double eps() {return 6e-15;}
         static constexpr char tchar() {return 'd';}
+};
+
+// Define the algorithms for selection
+enum class Algorithm : int
+{
+    Default = 0,
+    RotatingCaliper = 1,
+    SutherlandHodgeman = 2
+};
+
+// Since partial template specialization for function is not allowed
+// we tweak the overloading for selecting algorithm
+struct AlgorithmT
+{
+    using Default = std::integral_constant<Algorithm, Algorithm::Default>; // default or undefined
+    using RotatingCaliper = std::integral_constant<Algorithm, Algorithm::RotatingCaliper>;
+    using SutherlandHodgeman = std::integral_constant<Algorithm, Algorithm::SutherlandHodgeman>;
 };
 
 constexpr double _pi = 3.14159265358979323846;
@@ -530,15 +548,21 @@ bool _check_valid_bridge(const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scal
     return true;
 }
 
-// Rotating Caliper implementation of intersecting
-// Reference: https://web.archive.org/web/20150415231115/http://cgm.cs.mcgill.ca/~orm/rotcal.frame.html
-//    and http://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/97/Plante/CompGeomProject-EPlante/algorithm.html
 // xflags stores edges flags for gradient computation:
 // left 7bits from the 8bits are index number of the edge (index of the first vertex of edge)
 // right 1 bit indicate whether edge is from p1 (=1) or p2 (=0)
 // the vertices of the output polygon are ordered so that vertex i is the intersection of edge i-1 and edge i in the flags
 template <typename scalar_t, uint8_t MaxPoints1, uint8_t MaxPoints2> CUDA_CALLABLE_MEMBER inline
 Poly2<scalar_t, MaxPoints1 + MaxPoints2> intersect(
+    const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scalar_t, MaxPoints2> &p2,
+    uint8_t xflags[MaxPoints1 + MaxPoints2] = nullptr
+);
+
+// Rotating Caliper implementation of intersecting
+// Reference: https://web.archive.org/web/20150415231115/http://cgm.cs.mcgill.ca/~orm/rotcal.frame.html
+//    and http://cgm.cs.mcgill.ca/~godfried/teaching/cg-projects/97/Plante/CompGeomProject-EPlante/algorithm.html
+template <typename scalar_t, uint8_t MaxPoints1, uint8_t MaxPoints2> CUDA_CALLABLE_MEMBER inline
+Poly2<scalar_t, MaxPoints1 + MaxPoints2> intersect(AlgorithmT::RotatingCaliper,
     const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scalar_t, MaxPoints2> &p2,
     uint8_t xflags[MaxPoints1 + MaxPoints2] = nullptr
 ) {
@@ -693,6 +717,76 @@ Poly2<scalar_t, MaxPoints1 + MaxPoints2> intersect(
     }
 
     return result;
+}
+
+// This algorithm is the simplest one, but it's actually O(N*M) complexity
+// For more efficient algorithms refer to Rotating Calipers, Sweep Line, etc
+template <typename scalar_t, uint8_t MaxPoints1, uint8_t MaxPoints2> CUDA_CALLABLE_MEMBER inline
+Poly2<scalar_t, MaxPoints1 + MaxPoints2> intersect(AlgorithmT::SutherlandHodgeman,
+    const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scalar_t, MaxPoints2> &p2,
+    uint8_t xflags[MaxPoints1 + MaxPoints2] = nullptr
+) {
+    using PolyT = Poly2<scalar_t, MaxPoints1 + MaxPoints2>;
+    PolyT temp1, temp2; // declare variables to store temporary results
+    PolyT *pcut = &(temp1 = p1), *pcur = &temp2; // start with original polygon
+
+    uint8_t flag1[MaxPoints1 + MaxPoints2], flag2[MaxPoints1 + MaxPoints2];
+    for (uint8_t i = 0; i < p1.nvertices; i++)
+        flag1[i] = i << 1 | 1;
+    uint8_t *fcut = flag1, *fcur = flag2;
+
+    for (uint8_t j = 0; j < p2.nvertices; j++) // loop over edges of polygon doing cut
+    {
+        uint8_t jnext = _mod_inc(j, p2.nvertices);
+        auto edge = line2_from_pp(p2.vertices[j], p2.vertices[jnext]);
+
+        scalar_t signs[MaxPoints1 + MaxPoints2];
+        for (uint8_t i = 0; i < pcut->nvertices; i++)
+            signs[i] = distance(edge, pcut->vertices[i]);
+
+        for (uint8_t i = 0; i < pcut->nvertices; i++) // loop over edges of polygon to be cut
+        {
+            if (signs[i] < Numeric<scalar_t>::eps()) // eps is used for numerical stable when the boxes are very close
+            {
+                pcur->vertices[pcur->nvertices] = pcut->vertices[i];
+                fcur[pcur->nvertices] = fcut[i];
+                pcur->nvertices++;
+            }
+
+            uint8_t inext = _mod_inc(i, pcut->nvertices);
+            if (signs[i] * signs[inext] < -Numeric<scalar_t>::eps())
+            {
+                auto cut = line2_from_pp(pcut->vertices[i], pcut->vertices[inext]);
+                pcur->vertices[pcur->nvertices] = intersect(edge, cut);
+                if (signs[i] < -Numeric<scalar_t>::eps())
+                    fcur[pcur->nvertices] = j << 1;
+                else
+                    fcur[pcur->nvertices] = fcut[i];
+                pcur->nvertices++;
+            }
+        }
+
+        PolyT* p = pcut; pcut = pcur; pcur = p; // swap polygon
+        uint8_t * f = fcut; fcut = fcur; fcur = f; // swap flags
+        pcur->nvertices = 0; // clear current polygon for next iteration
+    }
+
+    if (xflags != nullptr)
+    {
+        for (uint8_t i = 0; i < pcut->nvertices; i++)
+            xflags[i] = fcut[i];
+    }
+    return *pcut;
+}
+
+// default implementation
+template <typename scalar_t, uint8_t MaxPoints1, uint8_t MaxPoints2> CUDA_CALLABLE_MEMBER inline
+Poly2<scalar_t, MaxPoints1 + MaxPoints2> intersect(
+    const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scalar_t, MaxPoints2> &p2,
+    uint8_t xflags[MaxPoints1 + MaxPoints2]
+) {
+    // TODO: Sutherland-Hodgeman might be faster when the polygon has few edges
+    return intersect(AlgorithmT::RotatingCaliper(), p1, p2, xflags);
 }
 
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline

@@ -84,6 +84,12 @@ PYBIND11_MODULE(dgal, m) {
         .def("__str__", py::overload_cast<const Poly2<T, 8>&>(&dgal::to_string<T, 8>))
         .def("__repr__", py::overload_cast<const Poly2<T, 8>&>(&dgal::pprint<T, 8>));
 
+    py::enum_<Algorithm>(m, "Algorithm")
+        .value("Default", dgal::Algorithm::Default)
+        .value("RotatingCaliper", dgal::Algorithm::RotatingCaliper)
+        .value("SutherlandHodgeman", dgal::Algorithm::SutherlandHodgeman)
+        .export_values();
+
     // constructors
 
     m.def("line2_from_pp", &dgal::line2_from_pp<T>, "Create a line with two points");
@@ -126,9 +132,21 @@ PYBIND11_MODULE(dgal, m) {
         "Get the intersection point of two lines");
     m.def("intersect", [](const Quad2<T>& b1, const Quad2<T>& b2){ return dgal::intersect(b1, b2); },
         "Get the intersection polygon of two boxes");
-    m.def("intersect_", [](const Quad2<T>& b1, const Quad2<T>& b2){
-            uint8_t xflags[8];
-            auto result = dgal::intersect(b1, b2, xflags);
+    m.def("intersect_", [](const Quad2<T>& b1, const Quad2<T>& b2, const Algorithm alg){
+            uint8_t xflags[8]; Poly2<T, 8> result;
+            switch(alg)
+            {
+                default:
+                case Algorithm::Default:
+                    result = dgal::intersect(b1, b2, xflags);
+                    break;
+                case Algorithm::RotatingCaliper:
+                    result = dgal::intersect(AlgorithmT::RotatingCaliper(), b1, b2, xflags);
+                    break;
+                case Algorithm::SutherlandHodgeman:
+                    result = dgal::intersect(AlgorithmT::SutherlandHodgeman(), b1, b2, xflags);
+                    break;
+            }
             vector<uint8_t> xflags_v(xflags, xflags + result.nvertices);
             return make_tuple(result, xflags_v);
         }, "Get the intersection polygon of two boxes and return flags");
