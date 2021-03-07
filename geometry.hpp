@@ -459,12 +459,14 @@ scalar_t distance(const Segment2<scalar_t> &s, const Point2<scalar_t> &p)
 
     if (t < t_from_pxy(l, s.x2, s.y2))
     {
-        scalar_t d = distance(p, Point2<scalar_t>({.x=s.x2, .y=s.y2}));
+        Point2<scalar_t> p2 {.x=s.x2, .y=s.y2};
+        scalar_t d = distance(p, p2);
         return sign > 0 ? d : -d;
     }
     else if(t > t_from_pxy(l, s.x1, s.y1))
     {
-        scalar_t d = distance(p, Point2<scalar_t>({.x=s.x1, .y=s.y1}));
+        Point2<scalar_t> p1 {.x=s.x1, .y=s.y1};
+        scalar_t d = distance(p, p1);
         return sign > 0 ? d : -d;
     }
     else
@@ -478,7 +480,7 @@ scalar_t distance(const Point2<scalar_t> &p, const Segment2<scalar_t> &s)
 // The distance is positive if the point is inside the polygon
 // The index corresponds to an edge if the point is inside the polygon, correspond to an edge or a vertex if outside
 template <typename scalar_t, uint8_t MaxPoints> CUDA_CALLABLE_MEMBER inline
-scalar_t distance(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t> &p, uint8_t idx)
+scalar_t distance(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t> &p, uint8_t &idx)
 {
     scalar_t dmin = -distance(segment2_from_pp(poly.vertices[poly.nvertices-1], poly.vertices[0]), p);
     idx = poly.nvertices - 1;

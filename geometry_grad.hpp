@@ -70,10 +70,10 @@ template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
 void segment2_from_pp_grad(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2, const Segment2<scalar_t> &grad,
     Point2<scalar_t> &grad_p1, Point2<scalar_t> &grad_p2)
 {
-    grad_p1.x = grad.x1;
-    grad_p1.y = grad.y1;
-    grad_p2.x = grad.x2;
-    grad_p2.y = grad.y2;
+    grad_p1.x += grad.x1;
+    grad_p1.y += grad.y1;
+    grad_p2.x += grad.x2;
+    grad_p2.y += grad.y2;
 }
 
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
@@ -162,11 +162,11 @@ void distance_grad(const Line2<scalar_t> &l, const Point2<scalar_t> &p, const sc
     scalar_t hab = hypot(l.a, l.b);
     scalar_t hab3 = hab * hab * hab;
 
-    grad_p.x = l.a / hab;
-    grad_p.y = l.b / hab;
-    grad_l.a = l.a * p.y * p.y / hab3;
-    grad_l.b = l.b * p.x * p.x / hab3;
-    grad_l.c = 1 / hab;
+    grad_p.x += grad * l.a / hab;
+    grad_p.y += grad * l.b / hab;
+    grad_l.a += grad * l.a * p.y * p.y / hab3;
+    grad_l.b += grad * l.b * p.x * p.x / hab3;
+    grad_l.c += grad * 1 / hab;
 }
 
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
@@ -179,19 +179,21 @@ void distance_grad(const Segment2<scalar_t> &s, const Point2<scalar_t> &p, const
 
     if (t < t_from_pxy(l, s.x2, s.y2))
     {
-        Point2<scalar_t> p2 = Point2<scalar_t>({.x=s.x2, .y=s.y2}), grad_p2;
+        Point2<scalar_t> p2 {.x=s.x2, .y=s.y2};
+        Point2<scalar_t> grad_p2;
         scalar_t d = distance(p, p2);
         distance_grad(p, p2, sign > 0 ? grad : -grad, grad_p, grad_p2);
-        grad_s.x2 = grad_p2.x;
-        grad_s.y2 = grad_p2.y;
+        grad_s.x2 += grad_p2.x;
+        grad_s.y2 += grad_p2.y;
     }
     else if(t > t_from_pxy(l, s.x1, s.y1))
     {
-        Point2<scalar_t> p1 = Point2<scalar_t>({.x=s.x1, .y=s.y1}), grad_p1;
+        Point2<scalar_t> p1 {.x=s.x1, .y=s.y1};
+        Point2<scalar_t> grad_p1;
         scalar_t d = distance(p, p1);
         distance_grad(p, p1, sign > 0 ? grad : -grad, grad_p, grad_p1);
-        grad_s.x1 = grad_p1.x;
-        grad_s.y1 = grad_p1.y;
+        grad_s.x1 += grad_p1.x;
+        grad_s.y1 += grad_p1.y;
     }
     else
     {
@@ -206,7 +208,8 @@ void distance_grad(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t
     Poly2<scalar_t, MaxPoints> &grad_poly, Point2<scalar_t> &grad_p, const uint8_t &idx)
 {
     uint8_t nidx = _mod_inc(idx, poly.nvertices);
-    Segment2<scalar_t> s = segment2_from_pp(poly.vertices[idx], poly.vertices[nidx]), grad_s;
+    Segment2<scalar_t> s = segment2_from_pp(poly.vertices[idx], poly.vertices[nidx]);
+    Segment2<scalar_t> grad_s;
     distance_grad(s, p, -grad, grad_s, grad_p);
     segment2_from_pp_grad(poly.vertices[idx], poly.vertices[nidx], grad_s, grad_poly.vertices[idx], grad_poly.vertices[nidx]);
 }
@@ -492,8 +495,7 @@ void iou_grad(const Poly2<scalar_t, MaxPoints1> &p1, const Poly2<scalar_t, MaxPo
     scalar_t gu = -gi * area_i / area_u; // i.e. -grad * area_i / area_u^2
     gi -= gu;
     
-    Poly2<scalar_t, MaxPoints1 + MaxPoints2> grad_pi;
-    grad_pi.zero();
+    Poly2<scalar_t, MaxPoints1 + MaxPoints2> grad_pi; grad_pi.zero();
     area_grad(p1, gu, grad_p1);
     area_grad(p2, gu, grad_p2);
     area_grad(pi, gi, grad_pi);
