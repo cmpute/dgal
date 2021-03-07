@@ -75,6 +75,7 @@ namespace dgal {
 //////////////////// forward declarations //////////////////////
 template <typename scalar_t> struct Point2;
 template <typename scalar_t> struct Line2;
+template <typename scalar_t> struct Segment2;
 template <typename scalar_t> struct AABox2;
 template <typename scalar_t, uint8_t MaxPoints> struct Poly2;
 template <typename scalar_t> using Quad2 = Poly2<scalar_t, 4>;
@@ -83,6 +84,8 @@ using Point2f = Point2<float>;
 using Point2d = Point2<double>;
 using Line2f = Line2<float>;
 using Line2d = Line2<double>;
+using Segment2f = Segment2<float>;
+using Segment2d = Segment2<double>;
 using AABox2f = AABox2<float>;
 using AABox2d = AABox2<double>;
 template <uint8_t MaxPoints> using Poly2f = Poly2<float, MaxPoints>;
@@ -165,8 +168,13 @@ template <typename scalar_t> struct Line2 // Infinite but directional line
 
     CUDA_CALLABLE_MEMBER inline bool intersects(const Line2<scalar_t> &l) const
     {
-        return a*l.b - l.a*b != 0;
+        return abs(a*l.b - l.a*b) > Numeric<scalar_t>::eps();
     }
+};
+
+template <typename scalar_t> struct Segment2
+{
+    scalar_t x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 };
 
 template <typename scalar_t> struct AABox2 // Axis-aligned 2D box for quick calculation
@@ -250,6 +258,14 @@ std::string to_string (const Line2<scalar_t> &val)
 }
 
 template <typename scalar_t>
+std::string to_string (const Segment2<scalar_t> &val)
+{
+    std::stringstream ss;
+    ss << "(" << val.x1 << "," << val.y1 << " -> " << val.x2 << "," << val.y2 << ")";
+    return ss.str(); 
+}
+
+template <typename scalar_t>
 std::string to_string (const AABox2<scalar_t> &val)
 {
     std::stringstream ss;
@@ -286,6 +302,14 @@ std::string pprint (const Line2<scalar_t> &val)
 }
 
 template <typename scalar_t>
+std::string pprint (const Segment2<scalar_t> &val)
+{
+    std::stringstream ss;
+    ss << "<Segment2" << Numeric<scalar_t>::tchar() << ' ' << to_string(val) << '>';
+    return ss.str();
+}
+
+template <typename scalar_t>
 std::string pprint (const AABox2<scalar_t> &val)
 {
     std::stringstream ss;
@@ -313,10 +337,51 @@ Line2<scalar_t> line2_from_xyxy(const scalar_t &x1, const scalar_t &y1,
 
 // Note that the order of points matters
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
-Line2<scalar_t> line2_from_pp(Point2<scalar_t> p1, Point2<scalar_t> p2)
+Line2<scalar_t> line2_from_pp(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2)
 {
     return line2_from_xyxy(p1.x, p1.y, p2.x, p2.y);
 }
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+Segment2<scalar_t> segment2_from_pp(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2)
+{
+    return {.x1=p1.x, .y1=p1.y, .x2=p2.x, .y2=p2.y};
+}
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+Line2<scalar_t> line2_from_segment2(const Segment2<scalar_t> &s)
+{
+    return line2_from_xyxy(s.x1, s.y1, s.x2, s.y2);
+}
+
+// Return the point on line l represented by single parameter t
+// Reference: CGAL::Line_2<Kernel>::point(const Kernel::FT i)
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+Point2<scalar_t> point_from_t(const Line2<scalar_t> &l, const scalar_t &t)
+{
+    if (l.b == 0)
+        return { .x = l.c / l.a, .y = 1 - t * l.a };
+    else
+        return {
+            .x = 1 + t * l.b,
+            .y = -(l.a+l.c)/l.b - t * l.a
+        };
+}
+
+// Return the single parameter representation (wrt. line l) of the projection of a point to line
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+scalar_t t_from_pxy(const Line2<scalar_t> &l, const scalar_t &x, const scalar_t &y)
+{
+    if (l.b == 0)
+        return (1 - y) / l.a;
+    else if (l.a == 0)
+        return (x - 1) / l.b;
+    else
+        return (l.b*x - l.a*y - l.a*(l.a+l.c)/l.b - l.b) / (l.a*l.a + l.b*l.b);
+}
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+scalar_t t_from_ppoint(const Line2<scalar_t> &l, const Point2<scalar_t> &p)
+{ return t_from_pxy(l, p.x, p.y); }
 
 // convert AABox2 to a polygon (box)
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
@@ -373,12 +438,67 @@ scalar_t distance(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2)
 
 // Calculate signed distance from point p to the line
 // The distance is negative if the point is at left hand side wrt the direction of line (x1y1 -> x2y2)
-// This behavior is the opposite to the cross product
+// Note: this behavior is the opposite to the cross product
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
 scalar_t distance(const Line2<scalar_t> &l, const Point2<scalar_t> &p)
 {
     return (l.a*p.x + l.b*p.y + l.c) / hypot(l.a, l.b);
 }
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Point2<scalar_t> &p, const Line2<scalar_t> &l)
+{ return distance(l, p); }
+
+// Calculate signed distance from point p to the segment s
+// Sign assignment is the same with distance from point to line
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Segment2<scalar_t> &s, const Point2<scalar_t> &p)
+{
+    Line2<scalar_t> l = line2_from_segment2(s);
+    scalar_t t = t_from_ppoint(l, p);
+    scalar_t sign = l.a*p.x + l.b*p.y + l.c;
+
+    if (t < t_from_pxy(l, s.x2, s.y2))
+    {
+        scalar_t d = distance(p, Point2<scalar_t>({.x=s.x2, .y=s.y2}));
+        return sign > 0 ? d : -d;
+    }
+    else if(t > t_from_pxy(l, s.x1, s.y1))
+    {
+        scalar_t d = distance(p, Point2<scalar_t>({.x=s.x1, .y=s.y1}));
+        return sign > 0 ? d : -d;
+    }
+    else
+        return sign / hypot(l.a, l.b);
+}
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Point2<scalar_t> &p, const Segment2<scalar_t> &s)
+{ return distance(s, p); }
+
+// Calculate signed distance from point p to the polygon poly
+// The distance is positive if the point is inside the polygon
+// The index corresponds to an edge if the point is inside the polygon, correspond to an edge or a vertex if outside
+template <typename scalar_t, uint8_t MaxPoints> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t> &p, uint8_t idx)
+{
+    scalar_t dmin = -distance(segment2_from_pp(poly.vertices[poly.nvertices-1], poly.vertices[0]), p);
+    idx = poly.nvertices - 1;
+    for (uint8_t i = 1; i < poly.nvertices; i++)
+    {
+        scalar_t dl = -distance(segment2_from_pp(poly.vertices[i-1], poly.vertices[i]), p);
+        if (abs(dl) < abs(dmin))
+        {
+            dmin = dl;
+            idx = i-1;
+        }
+    }
+    return dmin;
+}
+template <typename scalar_t, uint8_t MaxPoints> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t> &p)
+{ uint8_t index; return distance(poly, p, index); }
+template <typename scalar_t, uint8_t MaxPoints> CUDA_CALLABLE_MEMBER inline
+scalar_t distance(const Point2<scalar_t> &p, const Poly2<scalar_t, MaxPoints> &poly)
+{ uint8_t index; return distance(poly, p, index); }
 
 // Calculate intersection point of two lines
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline

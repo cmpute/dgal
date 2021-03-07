@@ -31,7 +31,7 @@
 #ifndef DGAL_GEOMETRY_GRAD_HPP
 #define DGAL_GEOMETRY_GRAD_HPP
 
-#include <dgal/geometry.hpp>
+#include "dgal/geometry.hpp"
 
 namespace dgal
 {
@@ -64,6 +64,22 @@ void line2_from_pp_grad(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2, 
     Point2<scalar_t> &grad_p1, Point2<scalar_t> &grad_p2)
 {
     return line2_from_xyxy_grad(p1.x, p1.y, p2.x, p2.y, grad, grad_p1.x, grad_p1.y, grad_p2.x, grad_p2.y);
+}
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+void segment2_from_pp_grad(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2, const Segment2<scalar_t> &grad,
+    Point2<scalar_t> &grad_p1, Point2<scalar_t> &grad_p2)
+{
+    grad_p1.x = grad.x1;
+    grad_p1.y = grad.y1;
+    grad_p2.x = grad.x2;
+    grad_p2.y = grad.y2;
+}
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+void line2_from_segment2_grad(const Segment2<scalar_t> &s, const Line2<scalar_t> &grad, Segment2<scalar_t> &grad_s)
+{
+    line2_from_xyxy_grad(s.x1, s.y1, s.x2, s.y2, grad, grad_s.x1, grad_s.y1, grad_s.x2, grad_s.y2);
 }
 
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
@@ -137,6 +153,62 @@ void distance_grad(const Point2<scalar_t> &p1, const Point2<scalar_t> &p2, const
     grad_p2.x -= grad * dx/d;
     grad_p1.y += grad * dy/d;
     grad_p2.y -= grad * dy/d;
+}
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+void distance_grad(const Line2<scalar_t> &l, const Point2<scalar_t> &p, const scalar_t &grad,
+    Line2<scalar_t> &grad_l, Point2<scalar_t> &grad_p)
+{
+    scalar_t hab = hypot(l.a, l.b);
+    scalar_t hab3 = hab * hab * hab;
+
+    grad_p.x = l.a / hab;
+    grad_p.y = l.b / hab;
+    grad_l.a = l.a * p.y * p.y / hab3;
+    grad_l.b = l.b * p.x * p.x / hab3;
+    grad_l.c = 1 / hab;
+}
+
+template <typename scalar_t> CUDA_CALLABLE_MEMBER inline
+void distance_grad(const Segment2<scalar_t> &s, const Point2<scalar_t> &p, const scalar_t &grad,
+    Segment2<scalar_t> &grad_s, Point2<scalar_t> &grad_p)
+{
+    Line2<scalar_t> l = line2_from_segment2(s);
+    scalar_t t = t_from_ppoint(l, p);
+    scalar_t sign = l.a*p.x + l.b*p.y + l.c;
+
+    if (t < t_from_pxy(l, s.x2, s.y2))
+    {
+        Point2<scalar_t> p2 = Point2<scalar_t>({.x=s.x2, .y=s.y2}), grad_p2;
+        scalar_t d = distance(p, p2);
+        distance_grad(p, p2, sign > 0 ? grad : -grad, grad_p, grad_p2);
+        grad_s.x2 = grad_p2.x;
+        grad_s.y2 = grad_p2.y;
+    }
+    else if(t > t_from_pxy(l, s.x1, s.y1))
+    {
+        Point2<scalar_t> p1 = Point2<scalar_t>({.x=s.x1, .y=s.y1}), grad_p1;
+        scalar_t d = distance(p, p1);
+        distance_grad(p, p1, sign > 0 ? grad : -grad, grad_p, grad_p1);
+        grad_s.x1 = grad_p1.x;
+        grad_s.y1 = grad_p1.y;
+    }
+    else
+    {
+        Line2<scalar_t> grad_l;
+        distance_grad(l, p, grad, grad_l, grad_p);
+        line2_from_segment2_grad(s, grad_l, grad_s);
+    }
+}
+
+template <typename scalar_t, uint8_t MaxPoints> CUDA_CALLABLE_MEMBER inline
+void distance_grad(const Poly2<scalar_t, MaxPoints> &poly, const Point2<scalar_t> &p, const scalar_t grad,
+    Poly2<scalar_t, MaxPoints> &grad_poly, Point2<scalar_t> &grad_p, const uint8_t &idx)
+{
+    uint8_t nidx = _mod_inc(idx, poly.nvertices);
+    Segment2<scalar_t> s = segment2_from_pp(poly.vertices[idx], poly.vertices[nidx]), grad_s;
+    distance_grad(s, p, -grad, grad_s, grad_p);
+    segment2_from_pp_grad(poly.vertices[idx], poly.vertices[nidx], grad_s, grad_poly.vertices[idx], grad_poly.vertices[nidx]);
 }
 
 template <typename scalar_t> CUDA_CALLABLE_MEMBER inline

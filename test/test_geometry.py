@@ -1,5 +1,6 @@
 import numpy as np
 import shapely.ops as so
+import shapely.geometry as sg
 import torch
 import unittest
 from scipy.spatial.distance import cdist
@@ -76,51 +77,67 @@ def test_merge():
     assert bi.min_x == 1 and bi.min_y == 1
     assert bi.max_x == 4 and bi.max_y == 4
 
-def test_with_shapely():
-    # randomly generate boxes in [-5, 5] range
-    n = 1000
-    xs = (np.random.rand(n) - 0.5) * 10
-    ys = (np.random.rand(n) - 0.5) * 10
-    ws = np.random.rand(n) * 5
-    hs = np.random.rand(n) * 5
-    rs = (np.random.rand(n) - 0.5) * 10
-    boxes = [poly2_from_xywhr(x, y, w, h, r) for x,y,w,h,r in zip(xs, ys, ws, hs, rs)]
-    shapely_boxes = [asPolygon([(p.x, p.y) for p in box.vertices]) for box in boxes]
+class TestWithShapely:
+    def genboxes(self):
+        # randomly generate boxes in [-5, 5] range
+        n = 1000
+        xs = (np.random.rand(n) - 0.5) * 10
+        ys = (np.random.rand(n) - 0.5) * 10
+        ws = np.random.rand(n) * 5
+        hs = np.random.rand(n) * 5
+        rs = (np.random.rand(n) - 0.5) * 10
+        boxes = [poly2_from_xywhr(x, y, w, h, r) for x,y,w,h,r in zip(xs, ys, ws, hs, rs)]
+        shapely_boxes = [asPolygon([(p.x, p.y) for p in box.vertices]) for box in boxes]
+        return boxes, shapely_boxes
 
-    # compare intersection of boxes
-    ipoly = [intersect(boxes[i], boxes[i+1]) for i in range(n-1)]
-    iarea = np.array([area(p) for p in ipoly])
+    def test_boxes(self):
+        boxes, shapely_boxes = self.genboxes()
+        n = len(boxes)
 
-    shapely_ipoly = [shapely_boxes[i].intersection(shapely_boxes[i+1]) for i in range(n-1)]
-    shapely_iarea = np.array([p.area for p in shapely_ipoly])
-    assert np.allclose(iarea, shapely_iarea)
+        # compare intersection of boxes
+        ipoly = [intersect(boxes[i], boxes[i+1]) for i in range(n-1)]
+        iarea = np.array([area(p) for p in ipoly])
 
-    # compare merge of boxes
-    mpoly = [merge(boxes[i], boxes[i+1]) for i in range(n-1)]
-    marea = np.array([area(p) for p in mpoly])
+        shapely_ipoly = [shapely_boxes[i].intersection(shapely_boxes[i+1]) for i in range(n-1)]
+        shapely_iarea = np.array([p.area for p in shapely_ipoly])
+        assert np.allclose(iarea, shapely_iarea)
 
-    shapely_mpoly = [so.cascaded_union([shapely_boxes[i], shapely_boxes[i+1]]).convex_hull for i in range(n-1)]
-    shapely_marea = np.array([p.area for p in shapely_mpoly])
-    assert np.allclose(marea, shapely_marea)
+        # compare merge of boxes
+        mpoly = [merge(boxes[i], boxes[i+1]) for i in range(n-1)]
+        marea = np.array([area(p) for p in mpoly])
 
-    # compare max distance calculation
-    md = [max_distance(boxes[i], boxes[i+1]) for i in range(n-1)]
+        shapely_mpoly = [so.cascaded_union([shapely_boxes[i], shapely_boxes[i+1]]).convex_hull for i in range(n-1)]
+        shapely_marea = np.array([p.area for p in shapely_mpoly])
+        assert np.allclose(marea, shapely_marea)
 
-    varr = [np.array([(p.x, p.y) for p in box.vertices]) for box in boxes]
-    scipy_md = [np.max(cdist(v1, v2)) for v1, v2 in zip(varr[:-1], varr[1:])]
-    assert np.allclose(md, scipy_md)
+        # compare max distance calculation
+        md = [max_distance(boxes[i], boxes[i+1]) for i in range(n-1)]
 
-    # compare dimension of the boxes
-    dim = np.array([dimension(p) for p in mpoly])
+        varr = [np.array([(p.x, p.y) for p in box.vertices]) for box in boxes]
+        scipy_md = [np.max(cdist(v1, v2)) for v1, v2 in zip(varr[:-1], varr[1:])]
+        assert np.allclose(md, scipy_md)
 
-    varr = [np.array([(p.x, p.y) for p in poly.vertices]) for poly in mpoly]
-    scipy_dim = [np.max(cdist(v, v)) for v in varr]
-    assert np.allclose(dim, scipy_dim)
+        # compare dimension of the boxes
+        dim = np.array([dimension(p) for p in mpoly])
 
-    # for i in range(n-1):
-    #     if not np.isclose(dim[i], scipy_dim[i]):
-    #         np.save("b1p.npy", np.array([xs[i], ys[i], ws[i], hs[i], rs[i]]))
-    #         np.save("b2p.npy", np.array([xs[i+1], ys[i+1], ws[i+1], hs[i+1], rs[i+1]]))
+        varr = [np.array([(p.x, p.y) for p in poly.vertices]) for poly in mpoly]
+        scipy_dim = [np.max(cdist(v, v)) for v in varr]
+        assert np.allclose(dim, scipy_dim)
+
+        # compare distance
+        p = (np.random.rand(2) - 0.5) * 16
+        p = Point2(p[0], p[1])
+        dpoly = np.array([distance(b, p) for b in boxes])
+
+        shape_p = sg.Point(p.x, p.y)
+        shapely_dpoly = np.array([b.distance(shape_p) for b in shapely_boxes])
+        out_mask = shapely_dpoly > 0
+        assert np.allclose(-dpoly[out_mask], shapely_dpoly[out_mask])
+
+        # for i in range(n-1):
+        #     if not np.isclose(dim[i], scipy_dim[i]):
+        #         np.save("b1p.npy", np.array([xs[i], ys[i], ws[i], hs[i], rs[i]]))
+        #         np.save("b2p.npy", np.array([xs[i+1], ys[i+1], ws[i+1], hs[i+1], rs[i+1]]))
 
 class TestWithAutograd(unittest.TestCase):
     '''
@@ -273,7 +290,7 @@ class TestWithAutograd(unittest.TestCase):
         assert np.allclose(grad2, b2p.grad.detach())
 
 if __name__ == "__main__":
-    TestWithAutograd().test_giou_grad()
+    TestWithShapely().test_boxes()
 
     # b1p, b2p = np.load("b1p.npy"), np.load("b2p.npy")
     # b1 = poly2_from_xywhr(b1p[0], b1p[1], b1p[2], b1p[3], b1p[4])

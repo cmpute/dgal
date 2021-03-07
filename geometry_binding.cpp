@@ -21,8 +21,8 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include <dgal/geometry.hpp>
-#include <dgal/geometry_grad.hpp>
+#include "dgal/geometry.hpp"
+#include "dgal/geometry_grad.hpp"
 
 namespace py = pybind11;
 using namespace std;
@@ -58,6 +58,15 @@ PYBIND11_MODULE(dgal, m) {
         .def_readwrite("c", &Line2<T>::c)
         .def("__str__", py::overload_cast<const Line2<T>&>(&dgal::to_string<T>))
         .def("__repr__", py::overload_cast<const Line2<T>&>(&dgal::pprint<T>));
+    py::class_<Segment2<T>>(m, "Segment2")
+        .def(py::init<>())
+        .def(py::init<T, T, T, T>())
+        .def_readwrite("x1", &Segment2<T>::x1)
+        .def_readwrite("y1", &Segment2<T>::y1)
+        .def_readwrite("x2", &Segment2<T>::x2)
+        .def_readwrite("y2", &Segment2<T>::y2)
+        .def("__str__", py::overload_cast<const Segment2<T>&>(&dgal::to_string<T>))
+        .def("__repr__", py::overload_cast<const Segment2<T>&>(&dgal::pprint<T>));
     py::class_<AABox2<T>>(m, "AABox2")
         .def(py::init<>())
         .def(py::init<T, T, T, T>())
@@ -94,6 +103,10 @@ PYBIND11_MODULE(dgal, m) {
 
     m.def("line2_from_pp", &dgal::line2_from_pp<T>, "Create a line with two points");
     m.def("line2_from_xyxy", &dgal::line2_from_xyxy<T>, "Create a line with coordinate of two points");
+    m.def("segment2_from_pp", &dgal::segment2_from_pp<T>, "Create a line segment with coordinate of two points");
+    m.def("line2_from_segment2", &dgal::line2_from_segment2<T>, "Create a line from a line segment");
+    m.def("point_from_t", &dgal::point_from_t<T>, "Find the point on a line with parameter t");
+    m.def("t_from_ppoint", &dgal::t_from_ppoint<T>, "Get parameter t for a point projected on a line");
     m.def("aabox2_from_poly2", &dgal::aabox2_from_poly2<T, 4>, "Create bounding box of a polygon");
     m.def("aabox2_from_poly2", &dgal::aabox2_from_poly2<T, 8>, "Create bounding box of a polygon");
     m.def("poly2_from_aabox2", &dgal::poly2_from_aabox2<T>, "Convert axis aligned box to polygon representation");
@@ -128,6 +141,19 @@ PYBIND11_MODULE(dgal, m) {
         "Get the distance between two points");
     m.def("distance", py::overload_cast<const Line2<T>&, const Point2<T>&>(&dgal::distance<T>),
         "Get the distance from a point to a line");
+    m.def("distance", py::overload_cast<const Point2<T>&, const Line2<T>&>(&dgal::distance<T>),
+        "Get the distance from a point to a line");
+    m.def("distance", py::overload_cast<const Segment2<T>&, const Point2<T>&>(&dgal::distance<T>),
+        "Get the distance from a point to a line segment");
+    m.def("distance", py::overload_cast<const Point2<T>&, const Segment2<T>&>(&dgal::distance<T>),
+        "Get the distance from a point to a line segment");
+    m.def("distance", [](const Quad2<T>& box, const Point2<T>& p){ return dgal::distance(box, p); },
+        "Get the distance from a point to a box");
+    m.def("distance", [](const Point2<T>& p, const Quad2<T>& box){ return dgal::distance(p, box); },
+        "Get the distance from a point to a box");
+    m.def("distance", [](const Quad2<T>& box, const Point2<T>& p){
+            uint8_t idx; distance(box, p, idx); return idx;
+        }, "Get the distance from a point to a box");
     m.def("intersect", py::overload_cast<const Line2<T>&, const Line2<T>&>(&dgal::intersect<T>),
         "Get the intersection point of two lines");
     m.def("intersect", [](const Quad2<T>& b1, const Quad2<T>& b2){ return dgal::intersect(b1, b2); },
@@ -203,6 +229,8 @@ PYBIND11_MODULE(dgal, m) {
 
     m.def("line2_from_pp_grad", &dgal::line2_from_pp_grad<T>, "Calculate gradient of line2_from_pp()");
     m.def("line2_from_xyxy_grad", &dgal::line2_from_pp_grad<T>, "Calculate gradient of line2_from_xyxy()");
+    m.def("segment2_from_pp_grad", &dgal::segment2_from_pp_grad<T>, "Calculate gradient of segment2_from_pp_grad()");
+    m.def("line2_from_segment2_grad", &dgal::line2_from_segment2_grad<T>, "Calculate gradient of line2_from_segment2_grad()");
     m.def("poly2_from_aabox2_grad", &dgal::poly2_from_aabox2_grad<T>, "Calculate gradient of poly2_from_aabox2()");
     m.def("poly2_from_xywhr_grad", [](const T& x, const T& y,
         const T& w, const T& h, const T& r, const Quad2<T>& grad){
@@ -217,6 +245,12 @@ PYBIND11_MODULE(dgal, m) {
 
     // gradient of functions
 
+    m.def("distance_grad", py::overload_cast<const Point2<T>&, const Point2<T>&, const T&, Point2<T>&, Point2<T>&>(&dgal::distance_grad<T>), "Calculate gradient of distance()");
+    m.def("distance_grad", py::overload_cast<const Line2<T>&, const Point2<T>&, const T&, Line2<T>&, Point2<T>&>(&dgal::distance_grad<T>), "Calculate gradient of distance()");
+    m.def("distance_grad", py::overload_cast<const Segment2<T>&, const Point2<T>&, const T&, Segment2<T>&, Point2<T>&>(&dgal::distance_grad<T>), "Calculate gradient of distance()");
+    m.def("distance_grad", [](const Quad2<T>& b, const Point2<T>& p, const T& grad, Quad2<T>& grad_b, Point2<T>& grad_p, const uint8_t& idx) {
+        dgal::distance_grad(b, p, grad, grad_b, grad_p, idx);
+    }, "Calculate the gradient of distance()");
     m.def("area_grad", py::overload_cast<const AABox2<T>&, const T&, AABox2<T>&>(&dgal::area_grad<T>), "Calculate gradient of area()");
     m.def("area_grad", py::overload_cast<const Quad2<T>&, const T&, Quad2<T>&>(&dgal::area_grad<T, 4>), "Calculate gradient of area()");
     m.def("area_grad", py::overload_cast<const Poly2<T, 8>&, const T&, Poly2<T, 8>&>(&dgal::area_grad<T, 8>), "Calculate gradient of area()");
